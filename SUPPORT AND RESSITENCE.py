@@ -1,35 +1,36 @@
-import time
-import joblib
-import numpy as np
-import pandas as pd
+# Standard library imports
 import os
-import logging
+import time
 import json
 import pickle
+import logging
 import warnings
-import talib
-import requests
 import threading
 import queue
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Third-party library imports
+import numpy as np
+import pandas as pd
+import talib
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 
-# Setting up logging with rotation to prevent huge log files
+# Logging imports
 from logging.handlers import RotatingFileHandler
-
 # Configure logging
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log_file = "stock_prediction.log"
@@ -1380,12 +1381,64 @@ def check_data_quality():
         logger.error(f"Error checking data quality: {e}")
         return 0.5
 
+def check_trading_performance():
+    """
+    Check recent trading performance metrics.
+    Evaluates profitability and adherence to risk limits.
+
+    Returns:
+        float: A score between 0 and 1 representing trading performance.
+    """
+    try:
+        if not trade_history:
+            logger.warning("No recent trade history available.")
+            return 0.5  # Neutral if no trade history
+
+        # Calculate total profit and average profit per trade
+        total_profit = sum(trade.get('profit', 0) for trade in trade_history)
+        total_trades = len(trade_history)
+        avg_profit = total_profit / total_trades if total_trades > 0 else 0
+
+        # Check adherence to risk limits (e.g., max drawdown)
+        max_drawdown = max(
+            (trade.get('drawdown', 0) for trade in trade_history),
+            default=0
+        )
+
+        # Normalize scores
+        profit_score = min(1.0, avg_profit / CONFIG['trading_params']['take_profit_pct'])
+        drawdown_score = max(0.0, 1.0 - (max_drawdown / CONFIG['max_drawdown_pct']))
+
+        # Combine scores with weights
+        trading_performance = (profit_score * 0.7) + (drawdown_score * 0.3)
+        logger.info(f"Trading Performance: Profit Score={profit_score:.2f}, Drawdown Score={drawdown_score:.2f}")
+        return trading_performance
+
+    except Exception as e:
+        logger.error(f"Error checking trading performance: {e}")
+        return 0.5  # Default to neutral score on error
+
 def check_model_performance():
-    """Check recent model performance metrics"""
+    """
+    Check recent model performance metrics.
+    Uses F1 score as the primary indicator of model performance.
+
+    Returns:
+        float: A score between 0 and 1 representing model performance.
+    """
     try:
         global model_performance_metrics
-        
+
         # If we have recent metrics
         if model_performance_metrics:
-            # Use F1 score as primary model performance indicator
-            if
+            f1_score = model_performance_metrics.get('f1', 0)
+            logger.info(f"Model F1 Score: {f1_score:.4f}")
+            # Normalize the F1 score to a 0-1 scale based on the validation threshold
+            return min(1.0, f1_score / CONFIG['model_validation_threshold'])
+        else:
+            logger.warning("No recent model performance metrics available.")
+            return 0.5  # Neutral if no metrics are available
+
+    except Exception as e:
+        logger.error(f"Error checking model performance: {e}")
+        return 0.5  # Default to neutral score on error
